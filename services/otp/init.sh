@@ -7,7 +7,7 @@ if [ -f /data/graph.obj ]; then
 elif [ -f "${OTP_ARTIFACT_SOURCE_PATH}" ]; then
     echo "Copying artifact."
     xz --decompress --stdout "${OTP_ARTIFACT_SOURCE_PATH}" > /data/graph.obj
-elif [ -f "${OTP_ARTIFACT_URL}" ]; then
+elif [ ! -z "${OTP_ARTIFACT_URL}" ]; then
     echo "Downloading artifact"
     wget -O- "${OTP_ARTIFACT_URL}" | xz --decompress --stdout > /data/graph.obj
 else
