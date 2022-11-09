@@ -10,7 +10,7 @@
 
 const { configure } = require('quasar/wrappers');
 
-const HEADWAY_HOST = 'https://maps.earth';
+const HEADWAY_HOST = 'https://seattle.endworld.org';
 
 module.exports = configure(function (/* ctx */) {
   return {
