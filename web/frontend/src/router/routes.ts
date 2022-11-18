@@ -47,6 +47,7 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/directions/:mode/:to/:from',
+    name: 'alternates',
     component: () => import('layouts/MainLayout.vue'),
     children: [
       {

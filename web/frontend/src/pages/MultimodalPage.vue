@@ -115,6 +115,7 @@ import Itinerary from 'src/models/Itinerary';
 import { useQuasar } from 'quasar';
 import { toLngLat } from 'src/utils/geomath';
 import { DistanceUnits } from 'src/utils/models';
+import { buildRouteLayer } from 'src/models/map';
 
 var toPoi: Ref<POI | undefined> = ref(undefined);
 var fromPoi: Ref<POI | undefined> = ref(undefined);
@@ -252,39 +253,25 @@ export default defineComponent({
         for (const lngLat of points) {
           bbox.extend(lngLat);
         }
-        getBaseMap()?.pushLayer(
-          layerName,
-          {
-            type: 'geojson',
-            data: {
-              type: 'Feature',
-              properties: {},
-              geometry: {
-                type: 'LineString',
-                coordinates: points,
-              },
-            },
+
+        const geojson: GeoJSON.Feature = {
+          type: 'Feature',
+          properties: {},
+          geometry: {
+            type: 'LineString',
+            coordinates: points,
           },
-          {
-            id: layerName,
-            type: 'line',
-            source: layerName,
-            layout: {
-              'line-join': 'round',
-              'line-cap': 'round',
-            },
-            paint: {
-              'line-color': active
-                ? leg.transitLeg
-                  ? '#E21919'
-                  : '#1976D2'
-                : '#777',
-              'line-width': leg.transitLeg ? 6 : 4,
-              'line-dasharray': leg.transitLeg ? [1] : [1, 2],
-            },
-          },
-          'symbol'
-        );
+        };
+        const routeLayer = buildRouteLayer(layerName, geojson, {
+          'line-color': active
+            ? leg.transitLeg
+              ? '#E21919'
+              : '#1976D2'
+            : '#777',
+          'line-width': leg.transitLeg ? 6 : 4,
+          'line-dasharray': leg.transitLeg ? [1] : [1, 2],
+        });
+        getBaseMap()?.pushRouteLayer(routeLayer);
       }
       getBaseMap()?.fitBounds(bbox);
     },

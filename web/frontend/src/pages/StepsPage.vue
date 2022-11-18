@@ -6,7 +6,7 @@
     class="top-left-fab"
     v-on:click="() => onBackClicked()"
   />
-  <div class="bottom-card bg-white" ref="bottomCard" v-if="fromPoi && toPoi">
+  <div class="bottom-card bg-white" ref="bottomCard">
     <q-list>
       <div v-for="item in $data.steps" v-bind:key="JSON.stringify(item)">
         <q-item class="q-my-sm" active-class="bg-blue-1">
@@ -35,38 +35,45 @@ import {
   setBottomCardAllowance,
 } from 'src/components/BaseMap.vue';
 import {
-  encodePoi,
-  canonicalizePoi,
   decanonicalizePoi,
-  POI,
   poiDisplayName,
+  TravelMode,
+  canonicalizePoi,
 } from 'src/utils/models';
 import Place from 'src/models/Place';
-import { defineComponent, Ref, ref } from 'vue';
-import { decodeValhallaPath } from 'src/third_party/decodePath';
-import { LngLat, LngLatBounds, Marker } from 'maplibre-gl';
-import { CacheableMode, getRoutes } from 'src/utils/routecache';
+import Route from 'src/models/Route';
+import { defineComponent } from 'vue';
+import { Marker } from 'maplibre-gl';
+import { valhallaTypeToIcon } from 'src/utils/format';
 import {
-  Route,
-  ProcessedRouteSummary,
-  summarizeRoute,
-  valhallaTypeToIcon,
-} from 'src/utils/routes';
-import { RouteLegManeuver } from 'src/utils/routes';
-
-var toPoi: Ref<POI | undefined> = ref(undefined);
-var fromPoi: Ref<POI | undefined> = ref(undefined);
+  ValhallaClient,
+  ValhallaMode,
+  ValhallaRouteLegManeuver,
+} from 'src/services/ValhallaClient';
+import { buildRouteLayer } from 'src/models/map';
 
 export default defineComponent({
   name: 'StepsPage',
   props: {
-    mode: String,
-    to: String,
-    from: String,
-    alternateIndex: String,
+    mode: {
+      type: String as () => TravelMode,
+      required: true,
+    },
+    to: {
+      type: String,
+      required: true,
+    },
+    from: {
+      type: String,
+      required: true,
+    },
+    alternateIndex: {
+      type: String,
+      required: true,
+    },
   },
   data: function (): {
-    steps: RouteLegManeuver[];
+    steps: ValhallaRouteLegManeuver[];
   } {
     return {
       steps: [],
@@ -74,94 +81,23 @@ export default defineComponent({
   },
   methods: {
     poiDisplayName,
-    summarizeRoute,
     valhallaTypeToIcon,
     onBackClicked() {
-      if (!fromPoi.value?.position && !toPoi.value?.position) {
-        this.$router.push('/');
-        return;
-      }
-      const fromCanonical = fromPoi.value ? encodePoi(fromPoi.value) : '_';
-      const toCanonical = toPoi.value ? encodePoi(toPoi.value) : '_';
-      this.$router.push(
-        `/directions/${this.mode}/${toCanonical}/${fromCanonical}`
-      );
-    },
-    rewriteUrl: async function () {
-      if (!fromPoi.value?.position && !toPoi.value?.position) {
-        this.$router.push('/');
-        return;
-      }
-      const fromCanonical = fromPoi.value
-        ? canonicalizePoi(fromPoi.value)
-        : '_';
-      const toEncoded = toPoi.value ? encodePoi(toPoi.value) : '_';
-      this.$router.push(
-        `/directions/${this.mode}/${toEncoded}/${encodeURIComponent(
-          fromCanonical
-        )}/${this.alternateIndex}`
-      );
-      if (fromPoi.value?.position && toPoi.value?.position) {
-        // TODO: replace POI with Place so we don't have to hit pelias twice?
-        let fromPlace = await Place.fetchFromSerializedId(fromCanonical);
-        const routes = await getRoutes(
-          fromPoi.value,
-          toPoi.value,
-          this.mode as CacheableMode,
-          fromPlace.preferredDistanceUnits()
-        );
-        if (this.alternateIndex) {
-          let idx = parseInt(this.alternateIndex);
-          this.processRoute(routes, idx);
-        }
-      } else {
-        if (map?.getLayer('headway_polyline')) {
-          map?.removeLayer('headway_polyline');
-        }
-        if (map?.getSource('headway_polyline')) {
-          map?.removeSource('headway_polyline');
-        }
-      }
-    },
-    processRoute(
-      routes: [Route, ProcessedRouteSummary][],
-      selectedIdx: number
-    ) {
-      for (var i = 0; i < 10; i += 1) {
-        if (map?.getLayer('headway_polyline' + i)) {
-          map?.removeLayer('headway_polyline' + i);
-        }
-        if (map?.getSource('headway_polyline' + i)) {
-          map?.removeSource('headway_polyline' + i);
-        }
-      }
-      const route = routes[selectedIdx];
-      const leg = route[0]?.legs[0];
-      this.$data.steps = leg.maneuvers;
-      if (leg && map) {
-        var totalTime = 0;
-        for (const key in leg.maneuvers) {
-          totalTime += leg.maneuvers[key].time;
-          leg.maneuvers[key].time = totalTime;
-        }
-        var points: [number, number][] = [];
-        decodeValhallaPath(leg.shape, 6).forEach((point) => {
-          points.push([point[1], point[0]]);
-        });
-        getBaseMap()?.pushRouteLayer(leg, 'headway_polyline' + selectedIdx, {
-          'line-color': '#1976D2',
-          'line-width': 6,
-        });
-        setTimeout(() => {
-          this.resizeMap();
-          getBaseMap()?.fitBounds(
-            new LngLatBounds(
-              new LngLat(route[0].summary.min_lon, route[0].summary.min_lat),
-              new LngLat(route[0].summary.max_lon, route[0].summary.max_lat)
-            )
-          );
-        });
-      }
+      let params = Object.assign({}, this.$router.currentRoute.value.params);
+      delete params.alternateIndex;
+
+      // Strangely pushing like this updates the URL, but the alternates page
+      // doesn't actually load - the "steps" are hidden, but the to/from fields
+      // and route picker UI isn't shown.
+      //    this.$router.push({ name: 'alternates', params });
+      //
+      // But for some reason, resolving the route to a url string, and pushing the string
+      // haves as expected.
+      let path = this.$router.resolve({
+        name: 'alternates',
+        params,
+      }).fullPath;
+      this.$router.push(path);
     },
     clearPolylines() {
       for (var i = 0; i < 10; i += 1) {
@@ -183,52 +119,47 @@ export default defineComponent({
       }
     },
   },
-  watch: {
-    to(newValue) {
-      setTimeout(async () => {
-        toPoi.value = await decanonicalizePoi(newValue);
-        if (!toPoi.value) {
-          this.clearPolylines();
-        }
-        this.resizeMap();
-
-        getBaseMap()?.removeMarkersExcept([]);
-
-        if (!newValue.position) {
-          return;
-        }
-        const marker = new Marker({ color: '#111111' }).setLngLat([
-          newValue.position.long,
-          newValue.position.lat,
-        ]);
-        getBaseMap()?.pushMarker('active_marker', marker);
-      });
-    },
-    from(newValue) {
-      setTimeout(async () => {
-        fromPoi.value = await decanonicalizePoi(newValue);
-        if (!fromPoi.value) {
-          this.clearPolylines();
-        }
-        this.resizeMap();
-      });
-    },
-  },
   beforeUnmount: function () {
     this.clearPolylines();
   },
   mounted: async function () {
     setTimeout(async () => {
-      toPoi.value = await decanonicalizePoi(this.$props.to as string);
-      fromPoi.value = await decanonicalizePoi(this.$props.from as string);
-      await this.rewriteUrl();
+      const fromPoi = await decanonicalizePoi(this.$props.from as string);
+      const toPoi = await decanonicalizePoi(this.$props.to as string);
+
+      if (!fromPoi || !toPoi) {
+        console.error('missing POI');
+        return;
+      }
+
+      // TODO: avoid this roundtrip by replacing POI with Place.
+      let fromPlace = await Place.fetchFromSerializedId(
+        canonicalizePoi(fromPoi)
+      );
+      const vRoutes = await ValhallaClient.fetchRoutes(
+        fromPoi,
+        toPoi,
+        this.$props.mode as ValhallaMode,
+        fromPlace.preferredDistanceUnits()
+      );
+
+      let selectedIdx = parseInt(this.$props.alternateIndex);
+      let vRoute = vRoutes[selectedIdx];
+      this.$data.steps = vRoute.legs[0].maneuvers;
+      let route = Route.fromValhalla(vRoute);
+      getBaseMap()?.pushRouteLayer(
+        buildRouteLayer('route_' + selectedIdx, route.geojson(), {
+          'line-color': '#1976D2',
+          'line-width': 6,
+        })
+      );
       this.resizeMap();
 
       getBaseMap()?.removeMarkersExcept([]);
-      if (this.toPoi?.position) {
+      if (toPoi.position) {
         const marker = new Marker({ color: '#111111' }).setLngLat([
-          this.toPoi.position.long,
-          this.toPoi.position.lat,
+          toPoi.position.long,
+          toPoi.position.lat,
         ]);
         getBaseMap()?.pushMarker('active_marker', marker);
       }
@@ -241,12 +172,6 @@ export default defineComponent({
     if (map?.getSource('headway_polyline')) {
       map?.removeSource('headway_polyline');
     }
-  },
-  setup: function () {
-    return {
-      toPoi,
-      fromPoi,
-    };
   },
 });
 </script>

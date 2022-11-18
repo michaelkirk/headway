@@ -45,12 +45,12 @@
         v-for="item in routes"
         :click-handler="() => clickRoute(item)"
         :active="activeRoute === item"
-        :duration-formatted="item[1].durationFormatted"
-        :distance-formatted="item[1].lengthFormatted"
+        :duration-formatted="item.durationFormatted"
+        :distance-formatted="item.lengthFormatted"
         v-bind:key="JSON.stringify(item)"
       >
         <q-item-label>
-          {{ $t('via_$place', { place: item[1].viaRoadsFormatted }) }}
+          {{ $t('via_$place', { place: item.viaRoadsFormatted }) }}
         </q-item-label>
         <q-item-label>
           <q-btn
@@ -78,14 +78,14 @@ import {
 } from 'src/utils/models';
 import { defineComponent, Ref, ref } from 'vue';
 import SearchBox from 'src/components/SearchBox.vue';
-import { LngLat, LngLatBounds, Marker } from 'maplibre-gl';
+import { Marker } from 'maplibre-gl';
 import { useQuasar } from 'quasar';
-import { CacheableMode, getRoutes } from 'src/utils/routecache';
-import { Route, ProcessedRouteSummary, summarizeRoute } from 'src/utils/routes';
+import Route from 'src/models/Route';
 import Place from 'src/models/Place';
 import { TravelMode } from 'src/utils/models';
 import RouteListItem from 'src/components/RouteListItem.vue';
 import TravelModeBar from 'src/components/TravelModeBar.vue';
+import { buildRouteLayer } from 'src/models/map';
 
 var toPoi: Ref<POI | undefined> = ref(undefined);
 var fromPoi: Ref<POI | undefined> = ref(undefined);
@@ -93,13 +93,16 @@ var fromPoi: Ref<POI | undefined> = ref(undefined);
 export default defineComponent({
   name: 'AlternatesPage',
   props: {
-    mode: String as () => TravelMode,
+    mode: {
+      type: String as () => TravelMode,
+      required: true,
+    },
     to: String,
     from: String,
   },
   data: function (): {
-    routes: [Route, ProcessedRouteSummary][];
-    activeRoute: [Route, ProcessedRouteSummary] | undefined;
+    routes: Route[];
+    activeRoute?: Route;
   } {
     return {
       routes: [],
@@ -109,8 +112,7 @@ export default defineComponent({
   components: { SearchBox, RouteListItem, TravelModeBar },
   methods: {
     poiDisplayName,
-    summarizeRoute,
-    clickRoute(route: [Route, ProcessedRouteSummary]) {
+    clickRoute(route: Route) {
       this.$data.activeRoute = route;
       let index = this.$data.routes.indexOf(route);
       if (index !== -1) {
@@ -125,7 +127,7 @@ export default defineComponent({
       this.toPoi = poi;
       this.rewriteUrl();
     },
-    showSteps(route: [Route, ProcessedRouteSummary]) {
+    showSteps(route: Route) {
       let index = this.$data.routes.indexOf(route);
       if (index !== -1 && this.to && this.from) {
         this.$router.push(
@@ -172,8 +174,7 @@ export default defineComponent({
       const toCanonical = toPoi.value ? canonicalizePoi(toPoi.value) : '_';
       this.$router.push(
         '/directions/' +
-          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-          encodeURIComponent(this.mode!) +
+          encodeURIComponent(this.mode) +
           '/' +
           encodeURIComponent(toCanonical) +
           '/' +
@@ -187,10 +188,10 @@ export default defineComponent({
         const fromCanonical = canonicalizePoi(fromPoi.value);
         // TODO: replace POI with Place so we don't have to hit pelias twice?
         let fromPlace = await Place.fetchFromSerializedId(fromCanonical);
-        const routes = await getRoutes(
+        const routes = await Route.fetchBest(
           fromPoi.value,
           toPoi.value,
-          this.mode as CacheableMode,
+          this.mode,
           fromPlace.preferredDistanceUnits()
         );
         this.renderRoutes(routes, 0);
@@ -199,10 +200,7 @@ export default defineComponent({
         getBaseMap()?.removeMarkersExcept([]);
       }
     },
-    renderRoutes(
-      routes: [Route, ProcessedRouteSummary][],
-      selectedIdx: number
-    ) {
+    renderRoutes(routes: Route[], selectedIdx: number) {
       this.$data.routes = routes;
       this.activeRoute = routes[selectedIdx];
 
@@ -212,39 +210,34 @@ export default defineComponent({
         if (routeIdx == selectedIdx) {
           continue;
         }
-        const route = routes[routeIdx][0];
-        const leg = route.legs[0];
-        if (!leg) {
-          console.error('unexpectedly missing route leg');
-          continue;
-        }
-
-        getBaseMap()?.pushRouteLayer(leg, 'headway_polyline' + routeIdx, {
-          'line-color': '#777',
-          'line-width': 4,
-          'line-dasharray': [0.5, 2],
-        });
+        const route = routes[routeIdx];
+        const routeLayer = buildRouteLayer(
+          `route_${routeIdx}`,
+          route.geojson(),
+          {
+            'line-color': '#777',
+            'line-width': 4,
+            'line-dasharray': [0.5, 2],
+          }
+        );
+        getBaseMap()?.pushRouteLayer(routeLayer);
       }
-      const selectedRoute = routes[selectedIdx][0];
-      const selectedLeg = selectedRoute.legs[0];
-      getBaseMap()?.pushRouteLayer(
-        selectedLeg,
-        'headway_polyline' + selectedIdx,
+
+      const selectedRoute = routes[selectedIdx];
+      const routeLayer = buildRouteLayer(
+        `route_${selectedIdx}`,
+        selectedRoute.geojson(),
         {
           'line-color': '#1976D2',
           'line-width': 6,
         }
       );
+      getBaseMap()?.pushRouteLayer(routeLayer);
+
       setTimeout(async () => {
         this.resizeMap();
       });
-      const summary = selectedRoute.summary;
-      getBaseMap()?.fitBounds(
-        new LngLatBounds(
-          new LngLat(summary.min_lon, summary.min_lat),
-          new LngLat(summary.max_lon, summary.max_lat)
-        )
-      );
+      getBaseMap()?.fitBounds(selectedRoute.bounds);
     },
     resizeMap() {
       if (this.$refs.bottomCard && this.$refs.bottomCard) {

@@ -6,22 +6,18 @@
 import { defineComponent } from 'vue';
 import maplibregl, {
   FitBoundsOptions,
-  LayerSpecification,
-  LineLayerSpecification,
   LngLatBoundsLike,
   LngLatLike,
   MapMouseEvent,
   MapOptions,
   Marker,
-  SourceSpecification,
 } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import Prefs from 'src/utils/Prefs';
 import Config from 'src/utils/Config';
 import { mapFeatureToPoi } from 'src/utils/models';
 import { debounce } from 'lodash';
-import { decodeValhallaPath } from 'src/third_party/decodePath';
-import { RouteLeg } from 'src/utils/routes';
+import { RouteLayerSpecification } from 'src/models/map';
 
 export var map: maplibregl.Map | null = null;
 
@@ -126,17 +122,7 @@ export interface BaseMapInterface {
   fitBounds: (bounds: LngLatBoundsLike, options?: FitBoundsOptions) => void;
   pushMarker: (key: string, marker: Marker) => void;
   removeMarkersExcept: (keys: string[]) => void;
-  pushLayer: (
-    key: string,
-    source: SourceSpecification,
-    layer: LayerSpecification,
-    beforeLayerType: string
-  ) => void;
-  pushRouteLayer: (
-    leg: RouteLeg,
-    layerId: string,
-    paint: LineLayerSpecification['paint']
-  ) => void;
+  pushRouteLayer: (layer: RouteLayerSpecification) => void;
   removeLayersExcept: (keys: string[]) => void;
 }
 
@@ -194,85 +180,29 @@ export default defineComponent({
         }
       });
     },
-    pushRouteLayer(
-      leg: RouteLeg,
-      layerId: string,
-      paint: LineLayerSpecification['paint']
-    ): void {
-      var totalTime = 0;
-      for (const key in leg.maneuvers) {
-        totalTime += leg.maneuvers[key].time;
-        leg.maneuvers[key].time = totalTime;
-      }
-      var points: [number, number][] = [];
-      decodeValhallaPath(leg.shape, 6).forEach((point) => {
-        points.push([point[1], point[0]]);
-      });
-
-      this.pushLayer(
-        layerId,
-        {
-          type: 'geojson',
-          data: {
-            type: 'Feature',
-            properties: {},
-            geometry: {
-              type: 'LineString',
-              coordinates: points,
-            },
-          },
-        },
-        {
-          id: layerId,
-          type: 'line',
-          source: layerId,
-          layout: {
-            'line-join': 'round',
-            'line-cap': 'round',
-          },
-          paint,
-        },
-        'symbol'
-      );
-    },
-    pushLayer(
-      key: string,
-      source: SourceSpecification,
-      layer: LayerSpecification,
-      beforeLayerType: string
-    ) {
-      let sourceKey = `headway_custom_layer_${key}`;
-      let actualLayer = layer;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if ((actualLayer as any).source) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (actualLayer as any).source = sourceKey;
-      }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if ((actualLayer as any).id) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (actualLayer as any).id = sourceKey;
-      }
+    pushRouteLayer({
+      sourceId,
+      sourceSpec,
+      layerSpec,
+      aboveLayerType,
+    }: RouteLayerSpecification): void {
       this.ensureMapLoaded((map) => {
-        if (map.getLayer(sourceKey)) {
-          map.removeLayer(sourceKey);
+        if (map.getSource(sourceId)) {
+          map.removeSource(sourceId);
         }
-        if (map.getSource(sourceKey)) {
-          map.removeSource(sourceKey);
-        }
-        map.addSource(sourceKey, source);
+        map.addSource(sourceId, sourceSpec);
         let beforeLayerId = undefined;
-        if (beforeLayerType) {
-          for (key in map.style._layers) {
+        if (aboveLayerType) {
+          for (let key in map.style._layers) {
             let layer = map.style._layers[key];
-            if (layer.type == beforeLayerType) {
+            if (layer.type == aboveLayerType) {
               beforeLayerId = layer.id;
               break;
             }
           }
         }
-        map.addLayer(layer, beforeLayerId);
-        this.layers.push(sourceKey);
+        map.addLayer(layerSpec, beforeLayerId);
+        this.layers.push(sourceId);
       });
     },
     removeLayersExcept(keys: string[]) {
@@ -332,7 +262,6 @@ export default defineComponent({
       fitBounds: this.fitBounds,
       pushMarker: this.pushMarker,
       removeMarkersExcept: this.removeMarkersExcept,
-      pushLayer: this.pushLayer,
       pushRouteLayer: this.pushRouteLayer,
       removeLayersExcept: this.removeLayersExcept,
     };
